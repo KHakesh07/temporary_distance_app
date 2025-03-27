@@ -13,8 +13,8 @@ airports_cols = ["Airport_ID", "Name", "City", "Country", "IATA", "ICAO",
                  "Tz_database", "Type", "Source"]
 
 # Load CSV Data
-routes_df = pd.read_csv("../routes.csv", names=routes_cols, usecols=["Source_Airport", "Destination_Airport"])
-airports_df = pd.read_csv('../airports.csv', names=airports_cols, usecols=["City", "IATA", "Latitude", "Longitude"])
+routes_df = pd.read_csv("routes.csv", names=routes_cols, usecols=["Source_Airport", "Destination_Airport"])
+airports_df = pd.read_csv('airports.csv', names=airports_cols, usecols=["City", "IATA", "Latitude", "Longitude"])
 
 # --- Function to Get Air Distance ---
 def get_air_distance_by_city(origin_city, destination_city):
@@ -87,7 +87,7 @@ if st.button("Calculate Distances"):
         
         # Get Road & Rail Distances
         road_distance = get_distance_graphhopper(origin_city, destination_city, "car")
-        rail_distance = get_distance_graphhopper(origin_city, destination_city, "truck")
+        rail_distance = get_distance_graphhopper(origin_city, destination_city, "rail")
 
     # Display Results
     st.subheader("📍 Distance Results")
@@ -102,6 +102,6 @@ if st.button("Calculate Distances"):
         st.warning("Road distance data not available.")
 
     if rail_distance:
-        st.success(f"🚆 Rail Distance: {rail_distance} km")
+        st.success("For ttrack Need to be Implemented")
     else:
         st.warning("Rail distance data not available.")

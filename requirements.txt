@@ -1,0 +1,12 @@
+streamlit
+pandas
+matplotlib
+plotly
+streamlit-option-menu
+streamlit-extras
+geopy
+openrouteservice
+numpy
+scipy
+loguru
+python-dotenv

@@ -1,2 +1,4 @@
 geopy
 stremlit
+requests
+pandas

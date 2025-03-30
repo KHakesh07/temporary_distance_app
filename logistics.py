@@ -88,8 +88,8 @@ airports_cols = ["Airport_ID", "Name", "City", "Country", "IATA", "ICAO",
                  "Tz_database", "Type", "Source"]
 
 # Load CSV Data
-routes_df = pd.read_csv("../routes.csv", names=routes_cols, usecols=["Source_Airport", "Destination_Airport"])
-airports_df = pd.read_csv('../airports.csv', names=airports_cols, usecols=["Name","City", "IATA", "Latitude", "Longitude"])
+routes_df = pd.read_csv("routes.csv", names=routes_cols, usecols=["Source_Airport", "Destination_Airport"])
+airports_df = pd.read_csv('airports.csv', names=airports_cols, usecols=["Name","City", "IATA", "Latitude", "Longitude"])
 
 
 def get_air_distance_by_city(origin_city, destination_city):

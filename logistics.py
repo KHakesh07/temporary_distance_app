@@ -5,7 +5,9 @@ from geopy.distance import geodesic
 import re
 
 # --- Google Maps API Key ---
-GOOGLE_MAPS_API_KEY = "AIzaSyAr3YAZlR8CNcjPoRA4hV_ePS93bCF39EQ"
+GOOGLE_MAPS_API_KEY = st.secrets["google"]["maps_api_key"]
+gmaps = googlemaps.Client(kwy=GOOGLE_MAPS_API_KEY)
+st.write("Google Maps api key is securely loaded!")
 
 # --- Function to Get Coordinates ---
 def get_lat_lon(city):

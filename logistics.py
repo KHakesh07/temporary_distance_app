@@ -232,7 +232,7 @@ for entry in st.session_state.travel_entries:
 # Add Another Trip
 if st.button("Add Another Trip"):
     new_id = max([e["id"] for e in st.session_state.travel_entries], default=-1) + 1
-    st.session_state.travel_entries.append({"id": 0, "mode": "Road", "type": "Petrol", "origin": "", "destination": ""})
+    st.session_state.travel_entries.append({"id": new_id, "mode": "Road", "type": "Petrol", "origin": "", "destination": ""})
     st.rerun()
 
 # Calculate Distance for Each Entry and Total

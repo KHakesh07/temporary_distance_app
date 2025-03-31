@@ -342,6 +342,7 @@ if st.button("Calculate Distance"):
 
     # Display the total distance across all entries
     total_distance = round(total_distance, 2)  # Round the final total
+    total_emission = round(total_emission, 2)
     if total_distance > 0 and total_emission > 0:
         st.write("---")
         st.success(f"🌍 **Total Distance Across All Trips**: {total_distance} km")

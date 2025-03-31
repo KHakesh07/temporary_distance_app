@@ -334,6 +334,7 @@ if st.button("Calculate Distance"):
                     emission_road = road_distance_value*0.68
                 else:
                     emission_road = road_distance_value * 0.012
+                st.write(f"🚉 Emission from  {entry['origin']} → {entry['destination']} is {emissio_road} kgco2e")
                 total_emission += emission_road
                 
                 

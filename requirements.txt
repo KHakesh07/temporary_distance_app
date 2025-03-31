@@ -11,3 +11,4 @@ scipy
 loguru
 python-dotenv
 googlemaps
+re

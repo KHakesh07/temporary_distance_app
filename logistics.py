@@ -7,16 +7,25 @@ import googlemaps
 # --- Google Maps API Key ---
 GOOGLE_MAPS_API_KEY = st.secrets["google"]["maps_api_key"]
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
-st.write("Google Maps api key is securely loaded!")
+
+
 
 # --- Function to Get Coordinates ---
 def get_lat_lon(city):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={city}&key={GOOGLE_MAPS_API_KEY}"
     response = requests.get(url).json()
     if response["status"] == "OK":
-        location = response["results"][0]["geometry"]["location"]
-        return location["lat"], location["lng"]
-    return None
+        result = response["results"][0]
+        location = result["geometry"]["location"]
+        country = None
+        for component in result["address_components"]:
+            if "country" in component["types"]:
+                country = component["long_name"]
+                break
+        return location["lat"], location["lng"], country
+    else:
+        print(f"Error fetching coordinates for {city}: {response.get('status')}")
+    return None, None, None
 
 def get_near_city(lat, lon):
     # use reverse geocoding api to get correct city name for coordinates
@@ -38,6 +47,24 @@ def get_near_city(lat, lon):
                     district_name =  component["long_name"]
         return city_name if city_name else district_name
     return "Unknown City"
+
+
+# --- Function to Find a Specific Station in a City ---
+def find_city_station(city):
+    url = f"https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {
+        "query": f"{city} railway station",
+        "type": "train_station",
+        "key": GOOGLE_MAPS_API_KEY
+    }
+    response = requests.get(url, params=params).json()
+    if response["status"] == "OK" and response["results"]:
+        station = response["results"][0]
+        station_name = station["name"]
+        station_lat = station["geometry"]["location"]["lat"]
+        station_lon = station["geometry"]["location"]["lng"]
+        return station_name, (station_lat, station_lon)
+    return None, None
 
 # --- Function to Find Nearest Transport Hub (Airport/Railway) ---
 def find_nearest_place(lat, lon, place_type):
@@ -74,6 +101,8 @@ def get_distance(origin, destination, mode):
         if "status" in element:
             if element["status"] == "OK":
                 return element["distance"]["text"]
+            elif element["status"] == "OK":
+                distance_km = round(geodesic(origin, destination).km, 2)
         elif element["status"] == "ZERO_RESULTS":
             return "No results found"
         else:
@@ -90,9 +119,17 @@ airports_cols = ["Airport_ID", "Name", "City", "Country", "IATA", "ICAO",
                  "Tz_database", "Type", "Source"]
 
 # Load CSV Data
-routes_df = pd.read_csv("routes.csv", names=routes_cols, usecols=["Source_Airport", "Destination_Airport"])
-airports_df = pd.read_csv('airports.csv', names=airports_cols, usecols=["Name","City", "IATA", "Latitude", "Longitude"])
+routes_df = pd.read_csv("../routes.csv", names=routes_cols, usecols=["Source_Airport", "Destination_Airport"])
+airports_df = pd.read_csv('../airports.csv', names=airports_cols, usecols=["Name","City", "IATA", "Latitude", "Longitude"])
 
+# --- Match Airport Name to City in airports_df ---
+def match_airport_to_city(airport_name, lat, lon):
+    # Try to find a matching city based on coordinates proximity
+    for _, row in airports_df.iterrows():
+        dist = geodesic((lat, lon), (row["Latitude"], row["Longitude"])).km
+        if dist < 50:  # Consider it a match if within 50 km
+            return row["City"]
+    return airport_name  # Fallback to airport name if no match
 
 def get_air_distance_by_city(origin_city, destination_city):
     """Find airline distance between two cities using OpenFlights data."""
@@ -100,92 +137,215 @@ def get_air_distance_by_city(origin_city, destination_city):
     destination_airport = airports_df[airports_df["City"].str.lower() == destination_city.lower()]
 
     if not origin_airport.empty and not destination_airport.empty:
-        print(f"Origin Airport: {origin_airport.iloc[0]['Name']} ({origin_airport.iloc[0]['City']})")
-        print(f"Destination Airport: {destination_airport.iloc[0]['Name']} ({destination_airport.iloc[0]['City']})")
 
         origin_coords = (origin_airport.iloc[0]["Latitude"], origin_airport.iloc[0]["Longitude"])
         destination_coords = (destination_airport.iloc[0]["Latitude"], destination_airport.iloc[0]["Longitude"])
 
-        print("Origin Coordinates:", origin_coords)
-        print("Destination Coordinates:", destination_coords)
         distance= round(geodesic(origin_coords, destination_coords).km, 2)
-        print("COrrect air distance:", distance)
         return distance
     return None
 
 def extract_distance(value):
-    """Extracts the numeric distance from a string like '3.3 km' or returns float directly."""
+    if value is None:
+        return 0.0
     if isinstance(value, str):
         match = re.search(r"[\d\.]+", value)  # Find number (including decimals)
         return float(match.group()) if match else 0.0  # Convert to float
     return float(value)
+
+
+def extract_rail_distance(value):
+    if value is None:
+        return 0.0
+    if isinstance(value, str):
+        match = re.search(r"[\d,]+\.?\d*", value)
+        if match:
+            result = float(match.group(0).replace(',', ''))
+            if result < 10:  # Arbitrary threshold for suspicion
+                print(f"Warning: Extracted distance {result} km seems unusually small.")
+            return result
+        return 0.0
+    return float(value)
+
 # --- Streamlit UI ---
-st.title("🚀 Multi-Mode Distance Calculator")
+st.title("🚀 Multi Travel Calculator & Distance Finder")
 
-# --- User Input ---
-origin_city = st.text_input("Enter Origin City", "Tenali")
-destination_city = st.text_input("Enter Destination City", "Delhi")
-mode = st.radio("Select Mode of Transport", ["Rail", "Road", "Air"])
+# Initialize session state
+if "travel_entries" not in st.session_state:
+    st.session_state.travel_entries = [
+        {"id": 0, "mode": "Road", "type": "Petrol", "origin": "", "destination": ""}
+    ]
 
+# Iterate through travel entries
+for entry in st.session_state.travel_entries:
+    index = entry["id"]
+    cols = st.columns([3, 3, 3, 3, 2])
+
+    with cols[0]:  # Travel Mode
+        mode_options = ["Road", "Rail", "Air"]
+        default_index = mode_options.index(entry["mode"]) if entry["mode"] in mode_options else 0
+        mode = st.selectbox(
+            f"Mode {index + 1}:", mode_options,
+            key=f"mode_{index}", index=default_index
+        )
+        entry["mode"] = mode
+    with cols[1]:
+        if entry["mode"] == "Road":
+            type_options = ["Auto CNG","Bike","Car Petrol", "Car CNG", "Electric bike", "Electric car"]
+            default_type_index = type_options.index(entry["type"]) if entry["type"] in type_options else 0
+            type = st.selectbox(
+                f"Type {index + 1}:", type_options,
+                key=f"type_{index}", index=default_type_index
+            )
+        elif entry["mode"] == "Rail":
+            type_options = ["Electric", "Diesel"]
+            default_type_index = type_options.index(entry["type"]) if entry["type"] in type_options else 0
+            type = st.selectbox(
+                f"Type {index + 1}:", type_options,
+                key=f"type_{index}", index=default_type_index
+            )
+        else:  # Default case (e.g., Air)
+            type_options = ["Domestic"]  # Adjust as needed
+            default_type_index = 0
+            type = st.selectbox(
+                f"Type {index + 1}:", type_options,
+                key=f"type_{index}", index=default_type_index
+            )
+        entry["type"] = type
+            
+              # Update entry with new selection
+
+    with cols[2]:  # Origin City
+        origin = st.text_input(f"Origin {index + 1}:", entry["origin"], key=f"origin_{index}")
+        entry["origin"] = origin
+
+    with cols[3]:  # Destination City
+        destination = st.text_input(f"Destination {index + 1}:", entry["destination"], key=f"destination_{index}")
+        entry["destination"] = destination
+
+    with cols[4]:  # Remove Entry Button
+        if st.button("Remove", key=f"remove_{index}"):
+            st.session_state.travel_entries = [e for e in st.session_state.travel_entries if e["id"] != index]
+            st.rerun()
+    
+
+# Add Another Trip
+if st.button("Add Another Trip"):
+    new_id = max([e["id"] for e in st.session_state.travel_entries], default=-1) + 1
+    st.session_state.travel_entries.append({"id": new_id, "mode": "Road", "origin": "", "destination": ""})
+    st.rerun()
+
+# Calculate Distance for Each Entry and Total
 if st.button("Calculate Distance"):
-    with st.spinner("Fetching distance..."):
-        origin_coords = get_lat_lon(origin_city)
-        dest_coords = get_lat_lon(destination_city)
+    total_distance = 0.0  # Initialize total distance accumulator
+    total_emission = 0.0
+    st.write("### Travel Distances")
+
+    for entry in st.session_state.travel_entries:
+        if not (entry["origin"].strip() and entry["destination"].strip()):
+            st.warning("Please enter both origin and destination.")
+            continue
+
+        origin_lat, origin_lon, origin_country = get_lat_lon(entry["origin"])
+        dest_lat, dest_lon, dest_country = get_lat_lon(entry["destination"])
+
+        if entry["mode"] in ["Rail", "Road"] and (origin_country != "India" or dest_country != "India"):
+            st.warning(f"{entry['mode']} travel is limited to India only. {entry['origin']} ({origin_country}) or {entry['destination']} ({dest_country}) is outside India.")
+            continue
+        origin_coords = (origin_lat, origin_lon)
+        dest_coords = (dest_lat, dest_lon)
 
         if origin_coords and dest_coords:
-            if mode == "Air":
-                # Get Nearest Airports
-                origin_airport, o_city, origin_airport_coords = find_nearest_place(*origin_coords, "airport")
-                dest_airport,d_city,  dest_airport_coords = find_nearest_place(*dest_coords, "airport")
-                
-                if origin_airport and dest_airport:
-                    # Compute Distances
-                    to_airport = get_distance(origin_coords, origin_airport_coords, "driving")
-                    air_distance = get_air_distance_by_city(o_city, d_city)
-                    if not air_distance:
-                        air_distance = get_air_distance_by_city(origin_city, destination_city)
-                    from_airport = get_distance(dest_airport_coords, dest_coords, "driving")
+            if entry["mode"] == "Air":
+                origin_airport, origin_city, origin_airport_coords = find_nearest_place(*origin_coords, "airport")
+                dest_airport, dest_city, dest_airport_coords = find_nearest_place(*dest_coords, "airport")
 
-                    # Display Results
-                    st.success(f"✈️ **Air Travel Distance**:\n")
-                    st.write(f"🚗 **{origin_city} → {origin_airport}**: {to_airport}")
-                    if air_distance is None or 0.0:
-                        st.warning("Enter City Big city names near by AirPort")
-                        origin_city = st.text_input("Enter Origin City", key = "HO")
-                        destination_city = st.text_input("Enter Destination City", key = "HG")
-                        air_distance = get_air_distance_by_city(origin_city, destination_city)
-
-                        
+                if origin_airport and dest_airport and origin_airport_coords and dest_airport_coords:
+                    to_airport = round(extract_distance(get_distance(origin_coords, origin_airport_coords, "driving")), 2)
+                    air_distance_result = get_air_distance_by_city(origin_city, dest_city)  # Use matched cities
+                    if air_distance_result is None:
+                        st.success("Using nearest airports distance.")                                
+                        air_distance = round(geodesic(origin_airport_coords, dest_airport_coords).km, 2)
                     else:
-                        st.write(f"✈️ **{o_city} → {d_city}**: {air_distance}")
-                    st.write(f"🚗 **{dest_airport} → {destination_city}**: {from_airport}")
-                    to_airport = extract_distance(to_airport)
-                    air_distance = extract_distance(air_distance)
-                    from_airport = extract_distance(from_airport)
-                    
-                    st.write("Total Distance:", to_airport + air_distance + from_airport)
+                        air_distance = round(air_distance_result, 2)
+                    from_airport = round(extract_distance(get_distance(dest_airport_coords, dest_coords, "driving")), 2)
+
+                    trip_total = round(to_airport + air_distance + from_airport, 2)
+                    total_distance += trip_total
+                    air_emissions = round(air_distance*1.58, 2)
+                    total_emission += air_emissions
+
+                    st.success(f"✈️ **Flight Distance**:")
+                    st.write(f"🚗 {entry['origin']} → {origin_airport}: {to_airport} km")
+                    st.write(f"✈️ {origin_airport} → {dest_airport}: {air_distance} km")
+                    st.write(f"🚗 {entry['destination']} ← {dest_airport}: {from_airport} km")
+                    st.write(f"📏 **Trip AIR Total**: {trip_total} km")
+                    st.write(f"Emission for air distance: {air_emissions} kgco2e")
 
                 else:
-                    st.warning("Could not find nearby airports.")
+                    st.warning(f"Could not fetch location data for {entry['origin']} or {entry['destination']}.")
 
-            elif mode == "Rail":
-                # Get Nearest Railway Stations
-                origin_station, o_city, origin_station_coords = find_nearest_place(*origin_coords, "train_station")
-                dest_station,d_city, dest_station_coords = find_nearest_place(*dest_coords, "train_station")
+            elif entry["mode"] == "Rail":
+                origin_station, origin_station_coords = find_city_station(entry["origin"])
+                if not origin_station:
+                    origin_station, origin_city, origin_station_coords = find_nearest_place(*origin_coords, "train_station")
+                    if not origin_station:
+                        st.warning(f"No railwaystation found near {entry['origin']}.")
+                dest_station, dest_station_coords = find_city_station(entry["destination"])
+                if not dest_station:
+                    dest_station, dest_city, dest_station_coords = find_nearest_place(*dest_coords, "train_station")
+                    if not dest_station:
+                        st.warning(f"No railwaystation found near {entry['destination']}.")
 
                 if origin_station and dest_station:
                     rail_distance = get_distance(origin_station_coords, dest_station_coords, "transit")
-                    st.success(f"🚆 **Rail Distance**:\n")
-                    st.write(f"🚉 **{origin_station} → {dest_station}**: {rail_distance}")
+                    rail_distance_value = round(extract_rail_distance(rail_distance), 4)
+                    total_distance += rail_distance_value  # Add to total
 
+                    st.success(f"🚆 **Rail Distance**:")
+                    st.write(f"🚉 **{origin_station} → {dest_station}**: {rail_distance_value} km")
+                    emission = 0.0
+                    if entry["type"] == "Electric":
+                        emission = rail_distance_value*0.82
+                        st.write(f"🚉 Emission for Electric  rail from **{origin_station} → {dest_station}**: {emission} kgco2e")
+                    else:
+                        emission = rail_distance_value*2.651
+                        st.write(f"🚉 Emission Diesel rail from **{origin_station} → {dest_station}**: {emission} kgco2e")
+                    total_emission += emission
                 else:
                     st.warning("Could not find nearby railway stations.")
 
             else:  # Road Mode
                 road_distance = get_distance(origin_coords, dest_coords, "driving")
-                st.success(f"🚗 **Road Distance**: {road_distance}")
+                road_distance_value = round(extract_distance(road_distance), 2)
+                total_distance += road_distance_value  # Add to total
 
+                st.write(f"🚗 Road Distance from {entry['origin']} → {entry['destination']}: {road_distance_value} km")
+                emission_road = 0.0
+                if entry["type"] == "Auto CNG":
+                    emission_road = road_distance_value*0.107
+                elif entry["type"] == "Bike":
+                    emission_road = road_distance_value*0.049
+                elif entry["type"] == "Car Petrol":
+                    emission_road = road_distance_value*0.187
+                elif entry["type"] == "Electric bike":
+                    emission_road = road_distance_value*0.031
+                elif entry["type"] == "Car CNG":
+                    emission_road = road_distance_value*0.68
+                else:
+                    emission_road = road_distance_value * 0.012
+                total_emission += emission_road
+                
+                
         else:
-            st.warning("Could not fetch location data.")
+            st.warning(f"Could not fetch location data for {entry['origin']} or {entry['destination']}.")
 
+    # Display the total distance across all entries
+    total_distance = round(total_distance, 2)  # Round the final total
+    if total_distance > 0 and total_emission > 0:
+        st.write("---")
+        st.success(f"🌍 **Total Distance Across All Trips**: {total_distance} km")
+        st.success(f"🌍 **Total Emission Across All Trips**: {total_emission} kgco2e")
+    else:
+        st.info("No valid distances calculated.")
 
